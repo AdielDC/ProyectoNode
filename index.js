@@ -1,271 +1,314 @@
 import express from "express";
+import jwt from "jsonwebtoken";
+import { Sequelize, DataTypes } from "sequelize";
 import fs from "fs";
-import sequelize from './database.js';
-import User from './user.js'; 
-import Craft from './crafts.js';
+import http from "http";
+import dotenv from "dotenv";
+import bcrypt from "bcrypt";
+
+dotenv.config();
 
 const app = express();
+const hostname = "127.0.0.1";
 const PORT = 3000;
+app.use(express.json());
 
-app.use(express.json()); // Usa express.json() directamente
 
-const readData = () => {
-    try {
-        const data = fs.readFileSync('./db.json', 'utf-8');
-        return JSON.parse(data);
-    } catch (error) {
-        console.error('Error al leer el archivo:', error);
-        return null;
-    }
-};
+// Conexión a la base de datos MySQL sin contraseña
+const sequelize = new Sequelize("myDatabase", "root", "", {
+    host: "localhost",
+    dialect: "mysql",
+});
 
-const writeData = (data) => {
-    try {
-        fs.writeFileSync("./db.json", JSON.stringify(data, null, 2)); // Formato legible
-    } catch (error) {
-        console.log('Error al escribir en el archivo:', error);
-    }
-};
+// Verifica la conexión
+sequelize.authenticate()
+    .then(() => console.log("Conectado a MySQL"))
+    .catch(err => console.error("No se pudo conectar a MySQL:", err));
 
-// Sincronizar modelos con la base de datos
+// Modelo de Usuario
+const User = sequelize.define("User", {
+    nombre: {
+        type: DataTypes.STRING,
+        allowNull: false,
+    },
+    telefono: {
+        type: DataTypes.STRING,
+        allowNull: false,
+    },
+    password: {
+        type: DataTypes.STRING,
+        allowNull: false,
+    },
+});
+
+
+// Modelo de Artesanía
+const Craft = sequelize.define("Craft", {
+    title: {
+        type: DataTypes.STRING,
+        allowNull: false,
+    },
+    description: {
+        type: DataTypes.TEXT,
+        allowNull: false,
+    },
+    price: {
+        type: DataTypes.FLOAT,
+        allowNull: false,
+    },
+});
+
+// Modelo de Categoría de Artesanía
+const CraftCategory = sequelize.define("CraftCategory", {
+    title: {
+        type: DataTypes.STRING,
+        allowNull: false,
+    },
+    description: {
+        type: DataTypes.TEXT,
+        allowNull: true, // Este campo es opcional
+    },
+});
+
+// Sincroniza los modelos con la base de datos
 sequelize.sync()
-    .then(() => {
-        console.log('Base de datos sincronizada');
-        app.listen(PORT, () => {
-            console.log(`Servidor corriendo en el puerto ${PORT}`);
-        });
-    })
-    .catch(err => console.error('Error al sincronizar la base de datos:', err));
+    .then(() => console.log("Base de datos sincronizada"))
+    .catch(err => console.error("Error al sincronizar la base de datos:", err));
 
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+
+const server = http.createServer(app);
 
 // Ruta principal
-app.get('/', (req, res) => {
-    res.send('Ruta principal: método GET');
+app.get("/", (req, res) => {
+    res.send("Ruta principal: método GET");
+});
+
+
+app.post("/api/users/register", async (req, res) => {
+    console.log("Cuerpo de la solicitud:", req.body); // Esto te mostrará qué estás recibiendo
+    try {
+        const { nombre, telefono, password } = req.body;
+        if (!nombre || !telefono || !password) {
+            console.log("Faltan campos requeridos"); // Agrega esto para saber qué falta
+            return res.status(400).json({ error: "Faltan campos requeridos" });
+        }
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const newUser = await User.create({ nombre, telefono, password: hashedPassword });
+        const token = jwt.sign({ id: newUser.id }, process.env.SECRET, { expiresIn: "1h" });
+        res.status(201).json({ user: newUser, token });
+    } catch (error) {
+        console.error("Error en el registro de usuario:", error);
+        res.status(400).json({ error: "Error al registrar usuario" });
+    }
+});
+
+
+
+
+// Ruta de autenticación
+app.post("/api/users/login", async (req, res) => {
+    const { nombre, telefono, password } = req.body;
+    const user = await User.findOne({ where: { nombre, telefono } });
+    if (!user) {
+        return res.status(401).json({ error: "Credenciales inválidas" });
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+        return res.status(401).json({ error: "Credenciales inválidas" });
+    }
+
+    const token = jwt.sign({ id: user.id }, process.env.SECRET, { expiresIn: "1h" });
+    res.json({ user, token });
+});
+
+
+// Middleware para verificar JWT
+const authenticateJWT = (req, res, next) => {
+    const token = req.headers["authorization"]?.split(" ")[1];
+    if (!token) {
+        return res.sendStatus(403); // Prohibido si no hay token
+    }
+    jwt.verify(token, process.env.SECRET, (err, user) => {
+        if (err) {
+            return res.sendStatus(403); // Prohibido si el token no es válido
+        }
+        req.user = user; // Guarda la información del usuario en la solicitud
+        next(); // Pasa al siguiente middleware o ruta
+    });
+};
+
+// Rutas protegidas para el perfil de usuario
+app.get("/api/users/profile", authenticateJWT, async (req, res) => {
+    try {
+        const user = await User.findByPk(req.user.id);
+        if (!user) {
+            return res.status(404).json({ error: "Usuario no encontrado" });
+        }
+        res.json(user);
+    } catch (error) {
+        res.status(500).json({ error: "Error al obtener el perfil del usuario" });
+    }
+});
+
+// Actualizar perfil de usuario
+app.put("/api/users/profile", authenticateJWT, async (req, res) => {
+    try {
+        const user = await User.findByPk(req.user.id);
+        if (!user) {
+            return res.status(404).json({ error: "Usuario no encontrado" });
+        }
+        user.nombre = req.body.nombre;
+        user.telefono = req.body.telefono;
+        await user.save();
+        res.json(user);
+    } catch (error) {
+        res.status(500).json({ error: "Error al actualizar el perfil" });
+    }
+});
+
+// Eliminar usuario
+app.delete("/api/users/profile", authenticateJWT, async (req, res) => {
+    try {
+        const user = await User.findByPk(req.user.id);
+        if (!user) {
+            return res.status(404).json({ error: "Usuario no encontrado" });
+        }
+        await user.destroy();
+        res.json({ message: "Usuario eliminado con éxito" });
+    } catch (error) {
+        res.status(500).json({ error: "Error al eliminar el usuario" });
+    }
 });
 
 // Rutas para Artesanías
-app.get('/api/crafts', async (req, res) => {
+app.get("/api/crafts", async (req, res) => {
     try {
         const crafts = await Craft.findAll();
         res.json(crafts);
     } catch (error) {
-        res.status(500).json({ error: 'Error al obtener artesanías' });
+        res.status(500).json({ error: "Error al obtener artesanías" });
     }
 });
 
-app.post('/api/crafts', async (req, res) => {
+// Crear una nueva artesanía
+app.post("/api/crafts", authenticateJWT, async (req, res) => {
     try {
         const { title, description, price } = req.body;
         const newCraft = await Craft.create({ title, description, price });
         res.status(201).json(newCraft);
     } catch (error) {
-        res.status(400).json({ error: 'Error al crear artesanía' });
+        res.status(400).json({ error: "Error al crear artesanía" });
     }
 });
 
-app.get('/api/crafts/:id', async (req, res) => {
+// Obtener artesanía por ID
+app.get("/api/crafts/:id", async (req, res) => {
     try {
         const craft = await Craft.findByPk(req.params.id);
-        if (!craft) return res.status(404).json({ error: 'Artesanía no encontrada' });
+        if (!craft) return res.status(404).json({ error: "Artesanía no encontrada" });
         res.json(craft);
     } catch (error) {
-        res.status(500).json({ error: 'Error al obtener artesanía' });
+        res.status(500).json({ error: "Error al obtener artesanía" });
     }
 });
 
-app.put('/api/crafts/:id', async (req, res) => {
+// Modificar artesanía por ID
+app.put("/api/crafts/:id", authenticateJWT, async (req, res) => {
     try {
         const { title, description, price } = req.body;
         const craft = await Craft.findByPk(req.params.id);
-        
-        if (!craft) return res.status(404).json({ error: 'Artesanía no encontrada' });
+        if (!craft) return res.status(404).json({ error: "Artesanía no encontrada" });
 
         craft.title = title;
         craft.description = description;
         craft.price = price;
-        
+
         await craft.save();
-        
         res.json(craft);
     } catch (error) {
-        res.status(400).json({ error: 'Error al actualizar artesanía' });
+        res.status(400).json({ error: "Error al actualizar artesanía" });
     }
 });
 
-app.delete('/api/crafts/:id', async (req, res) => {
+// Eliminar artesanía por ID
+app.delete("/api/crafts/:id", authenticateJWT, async (req, res) => {
     try {
         const craft = await Craft.findByPk(req.params.id);
-        
-        if (!craft) return res.status(404).json({ error: 'Artesanía no encontrada' });
+        if (!craft) return res.status(404).json({ error: "Artesanía no encontrada" });
 
         await craft.destroy();
-        
-        res.json({ message: 'Artesanía eliminada con éxito' });
+        res.json({ message: "Artesanía eliminada con éxito" });
     } catch (error) {
-        res.status(500).json({ error: 'Error al eliminar artesanía' });
+        res.status(500).json({ error: "Error al eliminar artesanía" });
     }
-});
-
-// Rutas para Usuarios
-app.post('/api/users/register', (req, res) => {
-    res.send('Registrar un nuevo usuario');
-});
-//prueba
-app.get("/users", (req, res) => {
-    const data = readData();
-    
-    if (!data || !data.users) { // Verifica si los datos son válidos
-        return res.status(500).json({ error: 'No se pudieron obtener los usuarios' });
-    }
-
-    res.json(data.users); // Devuelve la lista de usuarios
-});
-
-// Ruta para agregar un nuevo usuario
-app.post("/users", (req, res) => {
-    const data = readData();
-    
-    if (!data || !data.users) {
-        return res.status(500).json({ error: 'No se pudieron obtener los usuarios' });
-    }
-
-    const newUser = {
-        id: data.users.length ? data.users[data.users.length - 1].id + 1 : 1, // Genera un nuevo ID
-        nombre: req.body.nombre,
-        telefono: req.body.telefono
-    };
-
-    data.users.push(newUser);
-    writeData(data);
-
-    res.status(201).json(newUser); // Devuelve el nuevo usuario creado
-});
-
-// Ruta para modificar un usuario existente
-app.put("/users/:id", (req, res) => {
-    const data = readData();
-
-    if (!data || !data.users) {
-        return res.status(500).json({ error: 'No se pudieron obtener los usuarios' });
-    }
-
-    const userId = parseInt(req.params.id);
-    const userIndex = data.users.findIndex(user => user.id === userId);
-
-    if (userIndex === -1) {
-        return res.status(404).json({ error: 'Usuario no encontrado' });
-    }
-
-    // Modifica el usuario
-    data.users[userIndex].nombre = req.body.nombre;
-    data.users[userIndex].telefono = req.body.telefono;
-
-    writeData(data);
-
-    res.json(data.users[userIndex]); // Devuelve el usuario actualizado
-});
-
-// Ruta para eliminar un usuario
-app.delete("/users/:id", (req, res) => {
-    const data = readData();
-
-    if (!data || !data.users) {
-        return res.status(500).json({ error: 'No se pudieron obtener los usuarios' });
-    }
-
-    const userId = parseInt(req.params.id);
-    const userIndex = data.users.findIndex(user => user.id === userId);
-
-    if (userIndex === -1) {
-        return res.status(404).json({ error: 'Usuario no encontrado' });
-    }
-
-    // Elimina el usuario
-    const deletedUser = data.users.splice(userIndex, 1);
-
-    writeData(data);
-
-    res.json(deletedUser[0]); // Devuelve el usuario eliminado
-});
-
-
-//fin prueba
-app.post('/api/users/login', (req, res) => {
-    res.send('Iniciar sesión de un usuario');
-});
-
-app.get('/api/users/profile', (req, res) => {
-    res.send('Obtener perfil del usuario');
-});
-
-app.put('/api/users/profile', (req, res) => {
-    res.send('Actualizar perfil del usuario');
-});
-
-app.delete('/api/users/profile', (req, res) => {
-    res.send('Eliminar perfil del usuario');
 });
 
 // Rutas para Categorías de Artesanías
-app.get('/api/categories', (req, res) => {
-    res.send('Listar todas las categorías');
+app.get("/api/categories", async (req, res) => {
+    try {
+        const categories = await CraftCategory.findAll();
+        res.json(categories);
+    } catch (error) {
+        res.status(500).json({ error: "Error al obtener categorías" });
+    }
 });
 
-app.post('/api/categories', (req, res) => {
-    res.send('Crear una nueva categoría');
+// Crear una nueva categoría
+app.post("/api/categories", authenticateJWT, async (req, res) => {
+    try {
+        const { title, description } = req.body;
+        const newCategory = await CraftCategory.create({ title, description });
+        res.status(201).json(newCategory);
+    } catch (error) {
+        res.status(400).json({ error: "Error al crear categoría" });
+    }
 });
 
-app.get('/api/categories/:id', (req, res) => {
-    res.send(`Obtener detalles de la categoría con ID: ${req.params.id}`);
+// Obtener categoría por ID
+app.get("/api/categories/:id", async (req, res) => {
+    try {
+        const category = await CraftCategory.findByPk(req.params.id);
+        if (!category) return res.status(404).json({ error: "Categoría no encontrada" });
+        res.json(category);
+    } catch (error) {
+        res.status(500).json({ error: "Error al obtener categoría" });
+    }
 });
 
-app.put('/api/categories/:id', (req, res) => {
-    res.send(`Editar la categoría con ID: ${req.params.id}`);
+// Modificar categoría por ID
+app.put("/api/categories/:id", authenticateJWT, async (req, res) => {
+    try {
+        const { title, description } = req.body;
+        const category = await CraftCategory.findByPk(req.params.id);
+        if (!category) return res.status(404).json({ error: "Categoría no encontrada" });
+
+        category.title = title;
+        category.description = description;
+
+        await category.save();
+        res.json(category);
+    } catch (error) {
+        res.status(400).json({ error: "Error al actualizar categoría" });
+    }
 });
 
-app.delete('/api/categories/:id', (req, res) => {
-    res.send(`Eliminar la categoría con ID: ${req.params.id}`);
+// Eliminar categoría por ID
+app.delete("/api/categories/:id", authenticateJWT, async (req, res) => {
+    try {
+        const category = await CraftCategory.findByPk(req.params.id);
+        if (!category) return res.status(404).json({ error: "Categoría no encontrada" });
+
+        await category.destroy();
+        res.json({ message: "Categoría eliminada con éxito" });
+    } catch (error) {
+        res.status(500).json({ error: "Error al eliminar categoría" });
+    }
 });
 
-// Rutas para reservaciones o pedidos
-app.post('/api/reservations', (req, res) => {
-    res.send('Hacer una reservacion');
+// Iniciar servidor
+server.listen(PORT, hostname, () => {
+    console.log(`Servidor corriendo en http://${hostname}:${PORT}/`);
 });
-app.get('/api/reservations/:id', (req, res) => {
-    res.send('Listar todas las reservaciones con id');
-});
-app.put('/api/reservations/:id', (req, res) => {
-    res.send('editar las reservaciones con id');
-});
-app.delete('/api/reservations/:id', (req, res) => {
-    res.send('eliminar una reservacion con id');
-});
-
-//Rutas para pagos
-app.post('/api/payments/checkout', (req, res) => {
-    res.send('Procesar un pago');
-});
-app.get('/api/payments/history', (req, res) => {
-    res.send('Checar el historial de pagos');
-});
-
-//Rutas a notificaciones
-app.get('/api/notifications', (req, res) => {
-    res.send('Obtener todas las notificaciones a usuarios');
-});
-
-app.post('/api/reservations/send', (req, res) => {
-    res.send('Enviar notificacion a un usuario especifico');
-});
-
-
-
-//base de datos
-/*const mongoose = require('mongoose');
-
-mongoose.connect('mongodb://localhost:27017/proyecto', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-})
-.then(() => console.log('Conectado a MongoDB'))
-.catch(err => console.error('No se pudo conectar a MongoDB', err)); */

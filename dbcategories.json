@@ -1,0 +1,56 @@
+{
+    "categories": [
+      {
+        "id": 1,
+        "nombre": "Cerámica",
+        "descripcion": "Artículos hechos de arcilla y otros materiales cerámicos.",
+        "productos": [
+          {
+            "id": 101,
+            "nombre": "Taza de cerámica",
+            "precio": 15.00
+          },
+          {
+            "id": 102,
+            "nombre": "Plato decorativo",
+            "precio": 25.00
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "nombre": "Textiles",
+        "descripcion": "Productos hechos de tela, como ropa y accesorios.",
+        "productos": [
+          {
+            "id": 201,
+            "nombre": "Bufanda de lana",
+            "precio": 20.00
+          },
+          {
+            "id": 202,
+            "nombre": "Cojín bordado",
+            "precio": 30.00
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "nombre": "Madera",
+        "descripcion": "Artículos tallados o fabricados en madera.",
+        "productos": [
+          {
+            "id": 301,
+            "nombre": "Caja de madera",
+            "precio": 40.00
+          },
+          {
+            "id": 302,
+            "nombre": "Escultura de madera",
+            "precio": 60.00
+          }
+        ]
+      }
+    ]
+  }
+  
