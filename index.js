@@ -5,16 +5,32 @@ import fs from "fs";
 import http from "http";
 import dotenv from "dotenv";
 import bcrypt from "bcrypt";
+import cors from "cors";
 
 dotenv.config();
 
 const app = express();
-const hostname = "127.0.0.1";
+//const hostname = "127.0.0.1";
+const hostname = "0.0.0.0";
 const PORT = 3000;
+
+// Configuración de CORS
+const corsOptions = {
+    origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    exposedHeaders: ['Authorization'],
+    credentials: true,
+    maxAge: 86400
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
-
-// Conexión a la base de datos MySQL sin contraseña
+// Conexión a la base de datos MySQL
 const sequelize = new Sequelize("myDatabase", "root", "", {
     host: "localhost",
     dialect: "mysql",
@@ -41,7 +57,6 @@ const User = sequelize.define("User", {
     },
 });
 
-
 // Modelo de Artesanía
 const Craft = sequelize.define("Craft", {
     title: {
@@ -66,7 +81,7 @@ const CraftCategory = sequelize.define("CraftCategory", {
     },
     description: {
         type: DataTypes.TEXT,
-        allowNull: true, // Este campo es opcional
+        allowNull: true,
     },
 });
 
@@ -75,23 +90,45 @@ sequelize.sync()
     .then(() => console.log("Base de datos sincronizada"))
     .catch(err => console.error("Error al sincronizar la base de datos:", err));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-
 const server = http.createServer(app);
+
+// Middleware de autenticación JWT
+const authenticateJWT = (req, res, next) => {
+    const token = req.headers["authorization"]?.split(" ")[1];
+    if (!token) {
+        return res.status(403).json({ error: "Token no proporcionado" });
+    }
+
+    jwt.verify(token, process.env.SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ error: "Token inválido" });
+        }
+        req.user = user;
+        next();
+    });
+};
+
+// Middleware de manejo de errores CORS
+app.use((err, req, res, next) => {
+    if (err.name === 'UnauthorizedError') {
+        res.status(401).json({ error: 'Token inválido' });
+    } else if (err.name === 'NotAllowedError') {
+        res.status(403).json({ error: 'CORS no permitido' });
+    } else {
+        next(err);
+    }
+});
 
 // Ruta principal
 app.get("/", (req, res) => {
-    res.send("Ruta principal: método GET");
+    res.send("API Artesanías - Ruta principal");
 });
 
-
+// Rutas de Usuarios
 app.post("/api/users/register", async (req, res) => {
-    console.log("Cuerpo de la solicitud:", req.body); // Esto te mostrará qué estás recibiendo
     try {
         const { nombre, telefono, password } = req.body;
         if (!nombre || !telefono || !password) {
-            console.log("Faltan campos requeridos"); // Agrega esto para saber qué falta
             return res.status(400).json({ error: "Faltan campos requeridos" });
         }
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -99,48 +136,31 @@ app.post("/api/users/register", async (req, res) => {
         const token = jwt.sign({ id: newUser.id }, process.env.SECRET, { expiresIn: "1h" });
         res.status(201).json({ user: newUser, token });
     } catch (error) {
-        console.error("Error en el registro de usuario:", error);
+        console.error("Error en el registro:", error);
         res.status(400).json({ error: "Error al registrar usuario" });
     }
 });
 
-
-
-
-// Ruta de autenticación
 app.post("/api/users/login", async (req, res) => {
-    const { nombre, telefono, password } = req.body;
-    const user = await User.findOne({ where: { nombre, telefono } });
-    if (!user) {
-        return res.status(401).json({ error: "Credenciales inválidas" });
-    }
+    try {
+        const { nombre, telefono, password } = req.body;
+        const user = await User.findOne({ where: { nombre, telefono } });
+        if (!user) {
+            return res.status(401).json({ error: "Credenciales inválidas" });
+        }
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-        return res.status(401).json({ error: "Credenciales inválidas" });
-    }
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+            return res.status(401).json({ error: "Credenciales inválidas" });
+        }
 
-    const token = jwt.sign({ id: user.id }, process.env.SECRET, { expiresIn: "1h" });
-    res.json({ user, token });
+        const token = jwt.sign({ id: user.id }, process.env.SECRET, { expiresIn: "1h" });
+        res.json({ user, token });
+    } catch (error) {
+        res.status(500).json({ error: "Error en el login" });
+    }
 });
 
-
-// Middleware para verificar JWT
-const authenticateJWT = (req, res, next) => {
-    const token = req.headers["authorization"]?.split(" ")[1];
-    if (!token) {
-        return res.sendStatus(403); // Prohibido si no hay token
-    }
-    jwt.verify(token, process.env.SECRET, (err, user) => {
-        if (err) {
-            return res.sendStatus(403); // Prohibido si el token no es válido
-        }
-        req.user = user; // Guarda la información del usuario en la solicitud
-        next(); // Pasa al siguiente middleware o ruta
-    });
-};
-
-// Rutas protegidas para el perfil de usuario
 app.get("/api/users/profile", authenticateJWT, async (req, res) => {
     try {
         const user = await User.findByPk(req.user.id);
@@ -149,11 +169,10 @@ app.get("/api/users/profile", authenticateJWT, async (req, res) => {
         }
         res.json(user);
     } catch (error) {
-        res.status(500).json({ error: "Error al obtener el perfil del usuario" });
+        res.status(500).json({ error: "Error al obtener el perfil" });
     }
 });
 
-// Actualizar perfil de usuario
 app.put("/api/users/profile", authenticateJWT, async (req, res) => {
     try {
         const user = await User.findByPk(req.user.id);
@@ -169,7 +188,6 @@ app.put("/api/users/profile", authenticateJWT, async (req, res) => {
     }
 });
 
-// Eliminar usuario
 app.delete("/api/users/profile", authenticateJWT, async (req, res) => {
     try {
         const user = await User.findByPk(req.user.id);
@@ -183,7 +201,7 @@ app.delete("/api/users/profile", authenticateJWT, async (req, res) => {
     }
 });
 
-// Rutas para Artesanías
+// Rutas de Artesanías
 app.get("/api/crafts", async (req, res) => {
     try {
         const crafts = await Craft.findAll();
@@ -193,7 +211,6 @@ app.get("/api/crafts", async (req, res) => {
     }
 });
 
-// Crear una nueva artesanía
 app.post("/api/crafts", authenticateJWT, async (req, res) => {
     try {
         const { title, description, price } = req.body;
@@ -204,7 +221,6 @@ app.post("/api/crafts", authenticateJWT, async (req, res) => {
     }
 });
 
-// Obtener artesanía por ID
 app.get("/api/crafts/:id", async (req, res) => {
     try {
         const craft = await Craft.findByPk(req.params.id);
@@ -215,7 +231,6 @@ app.get("/api/crafts/:id", async (req, res) => {
     }
 });
 
-// Modificar artesanía por ID
 app.put("/api/crafts/:id", authenticateJWT, async (req, res) => {
     try {
         const { title, description, price } = req.body;
@@ -225,7 +240,6 @@ app.put("/api/crafts/:id", authenticateJWT, async (req, res) => {
         craft.title = title;
         craft.description = description;
         craft.price = price;
-
         await craft.save();
         res.json(craft);
     } catch (error) {
@@ -233,12 +247,10 @@ app.put("/api/crafts/:id", authenticateJWT, async (req, res) => {
     }
 });
 
-// Eliminar artesanía por ID
 app.delete("/api/crafts/:id", authenticateJWT, async (req, res) => {
     try {
         const craft = await Craft.findByPk(req.params.id);
         if (!craft) return res.status(404).json({ error: "Artesanía no encontrada" });
-
         await craft.destroy();
         res.json({ message: "Artesanía eliminada con éxito" });
     } catch (error) {
@@ -246,7 +258,7 @@ app.delete("/api/crafts/:id", authenticateJWT, async (req, res) => {
     }
 });
 
-// Rutas para Categorías de Artesanías
+// Rutas de Categorías
 app.get("/api/categories", async (req, res) => {
     try {
         const categories = await CraftCategory.findAll();
@@ -256,7 +268,6 @@ app.get("/api/categories", async (req, res) => {
     }
 });
 
-// Crear una nueva categoría
 app.post("/api/categories", authenticateJWT, async (req, res) => {
     try {
         const { title, description } = req.body;
@@ -267,7 +278,6 @@ app.post("/api/categories", authenticateJWT, async (req, res) => {
     }
 });
 
-// Obtener categoría por ID
 app.get("/api/categories/:id", async (req, res) => {
     try {
         const category = await CraftCategory.findByPk(req.params.id);
@@ -278,7 +288,6 @@ app.get("/api/categories/:id", async (req, res) => {
     }
 });
 
-// Modificar categoría por ID
 app.put("/api/categories/:id", authenticateJWT, async (req, res) => {
     try {
         const { title, description } = req.body;
@@ -287,7 +296,6 @@ app.put("/api/categories/:id", authenticateJWT, async (req, res) => {
 
         category.title = title;
         category.description = description;
-
         await category.save();
         res.json(category);
     } catch (error) {
@@ -295,12 +303,10 @@ app.put("/api/categories/:id", authenticateJWT, async (req, res) => {
     }
 });
 
-// Eliminar categoría por ID
 app.delete("/api/categories/:id", authenticateJWT, async (req, res) => {
     try {
         const category = await CraftCategory.findByPk(req.params.id);
         if (!category) return res.status(404).json({ error: "Categoría no encontrada" });
-
         await category.destroy();
         res.json({ message: "Categoría eliminada con éxito" });
     } catch (error) {
@@ -309,6 +315,8 @@ app.delete("/api/categories/:id", authenticateJWT, async (req, res) => {
 });
 
 // Iniciar servidor
-server.listen(PORT, hostname, () => {
-    console.log(`Servidor corriendo en http://${hostname}:${PORT}/`);
+
+
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Servidor corriendo en http://0.0.0.0:${PORT}/`);
 });
