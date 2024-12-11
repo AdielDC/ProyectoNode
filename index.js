@@ -6,24 +6,25 @@ import http from "http";
 import dotenv from "dotenv";
 import bcrypt from "bcrypt";
 import cors from "cors";
+import stripe from 'stripe';
 
 dotenv.config();
 
 const app = express();
 //const hostname = "127.0.0.1";
-const hostname = "0.0.0.0";
+const hostname = "192.168.137.114";
 const PORT = 3000;
 
 // Configuración de CORS
 const corsOptions = {
-    origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+    origin: ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://192.168.0.5', 'http://192.68.0.6'],
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     exposedHeaders: ['Authorization'],
     credentials: true,
     maxAge: 86400
 };
-
+app.use(cors());
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
@@ -71,6 +72,10 @@ const Craft = sequelize.define("Craft", {
         type: DataTypes.FLOAT,
         allowNull: false,
     },
+    stock:{
+        type: DataTypes.INTEGER,
+        allowNull: false,
+    }
 });
 
 // Modelo de Categoría de Artesanía
@@ -84,6 +89,7 @@ const CraftCategory = sequelize.define("CraftCategory", {
         allowNull: true,
     },
 });
+
 
 // Sincroniza los modelos con la base de datos
 sequelize.sync()
@@ -213,8 +219,8 @@ app.get("/api/crafts", async (req, res) => {
 
 app.post("/api/crafts", authenticateJWT, async (req, res) => {
     try {
-        const { title, description, price } = req.body;
-        const newCraft = await Craft.create({ title, description, price });
+        const { title, description, price, stock} = req.body;
+        const newCraft = await Craft.create({ title, description, price, stock});
         res.status(201).json(newCraft);
     } catch (error) {
         res.status(400).json({ error: "Error al crear artesanía" });
@@ -240,6 +246,7 @@ app.put("/api/crafts/:id", authenticateJWT, async (req, res) => {
         craft.title = title;
         craft.description = description;
         craft.price = price;
+        craft.stock= stock;
         await craft.save();
         res.json(craft);
     } catch (error) {
@@ -257,6 +264,7 @@ app.delete("/api/crafts/:id", authenticateJWT, async (req, res) => {
         res.status(500).json({ error: "Error al eliminar artesanía" });
     }
 });
+
 
 // Rutas de Categorías
 app.get("/api/categories", async (req, res) => {
